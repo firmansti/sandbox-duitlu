@@ -15,74 +15,108 @@ app = FastAPI(
 MERCHANT_CODE = "DS30061"
 API_KEY = "eda078a76db5d9f8dd8507990914a0fc"
 
-
 # --- Models ---
-
 class TransactionStatusRequest(BaseModel):
     merchantcode: str
     merchantOrderId: str
     signature: str
 
-
 class TransactionStatusResponse(BaseModel):
-    merchantOrderId: str
+    merchantOrderId: int
     reference: str
     amount: str
     fee: str
     statusCode: str
     statusMessage: str
 
+# --- Dummy Transaction Data Generation ---
+# This will programmatically generate the 50 transactions matching the 50 invoices from WHMCS sandbox
+def generate_transactions():
+    txns = {}
+    
+    # We generated invoices with IDs 14000 to 14049 in the WHMCS sandbox
+    for i in range(50):
+        inv_id = 14000 + i
+        
+        # Calculate exactly as in WHMCS sandbox
+        total = 100000.0 + (i * 7500)
+        
+        # The exact order id we will use.
+        order_id_raw = str(inv_id)
 
-# --- Dummy Transaction Data ---
-# Keyed by merchantOrderId, matching the invoices in the WHMCS sandbox
-TRANSACTIONS = {
-    # Invoice #13861 - Andi Lesmana - Rp 363.414 (VA Mandiri)
-    "DUITKU-13861": {
-        "merchantOrderId": "DUITKU-13861",
-        "reference": "DK-REF-13861-001",
-        "amount": "363414",
-        "fee": "4000",
-        "statusCode": "00",
-        "statusMessage": "SUCCESS",
-    },
-    # Invoice #14262 - Bubun Badruzaman - Rp 181.700 (VA CIMB)
-    "DUITKU-14262": {
-        "merchantOrderId": "DUITKU-14262",
-        "reference": "DK-REF-14262-002",
-        "amount": "181700",
-        "fee": "4000",
-        "statusCode": "00",
-        "statusMessage": "SUCCESS",
-    },
-    # Invoice #14500 - Candra Wijaya - Rp 500.000 (VA BCA)
-    "DUITKU-14500": {
-        "merchantOrderId": "DUITKU-14500",
-        "reference": "DK-REF-14500-003",
-        "amount": "500000",
-        "fee": "4000",
-        "statusCode": "00",
-        "statusMessage": "SUCCESS",
-    },
-    # A discrepancy example: amount differs from WHMCS invoice
-    "DUITKU-14501": {
-        "merchantOrderId": "DUITKU-14501",
-        "reference": "DK-REF-14501-004",
-        "amount": "450000",
-        "fee": "4000",
-        "statusCode": "00",
-        "statusMessage": "SUCCESS",
-    },
-    # A pending transaction example
-    "DUITKU-14502": {
-        "merchantOrderId": "DUITKU-14502",
-        "reference": "DK-REF-14502-005",
-        "amount": "200000",
-        "fee": "4000",
-        "statusCode": "01",
-        "statusMessage": "PENDING",
-    },
-}
+        
+        # Determine the case based on index
+        if i < 20:
+            # 1. MATCHED: Perfect match
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-MATCH",
+                "amount": str(int(total)),
+                "fee": "4000",
+                "statusCode": "00",
+                "statusMessage": "SUCCESS",
+            }
+        elif i < 25:
+            # 2. DISCREPANCY (Lower): Duitku amount < WHMCS amount
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-LOWER",
+                "amount": str(int(total - 15000)),
+                "fee": "4000",
+                "statusCode": "00",
+                "statusMessage": "SUCCESS",
+            }
+        elif i < 30:
+            # 3. DISCREPANCY (Higher): Duitku amount > WHMCS amount
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-HIGHER",
+                "amount": str(int(total + 15000)),
+                "fee": "4000",
+                "statusCode": "00",
+                "statusMessage": "SUCCESS",
+            }
+        elif i < 35:
+            # 4. PENDING: Transaction not yet completed
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-WAIT",
+                "amount": str(int(total)),
+                "fee": "4000",
+                "statusCode": "01",
+                "statusMessage": "PENDING",
+            }
+        elif i < 40:
+            # 5. FAILED: Transaction failed in Duitku
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-FAIL",
+                "amount": str(int(total)),
+                "fee": "4000",
+                "statusCode": "02",
+                "statusMessage": "FAILED",
+            }
+        elif i < 45:
+            # 6. FEE DISCREPANCY: Fee is 0 (anomalous)
+            txn_data = {
+                "merchantOrderId": inv_id,
+                "reference": f"DK-REF-{inv_id}-NOFEE",
+                "amount": str(int(total)),
+                "fee": "0",
+                "statusCode": "00",
+                "statusMessage": "SUCCESS",
+            }
+        else:
+            # 7. MISSING: 45 to 49 will not be added to the dictionary, simulating 404
+            continue
+            
+        # Register the transaction
+        txns[order_id_raw] = txn_data
 
+
+    return txns
+
+TRANSACTIONS = generate_transactions()
 
 # --- Signature Verification ---
 
@@ -96,62 +130,47 @@ def verify_signature(merchant_code: str, merchant_order_id: str, signature: str)
     ).hexdigest()
     return signature == expected
 
-
 # --- Endpoints ---
 
 @app.post("/webapi/api/merchant/transactionStatus")
 async def transaction_status(request: TransactionStatusRequest):
     """
     Duitku-compatible transactionStatus endpoint.
-
-    Accepts JSON POST with:
-        - merchantcode: str
-        - merchantOrderId: str
-        - signature: md5(merchantCode + merchantOrderId + apiKey)
-
-    Returns transaction details matching the real Duitku API response format.
-
-    Example:
-        curl -X POST "http://localhost:8002/webapi/api/merchant/transactionStatus" \\
-             -H "Content-Type: application/json" \\
-             -d '{"merchantcode":"DS30061","merchantOrderId":"DUITKU-13861","signature":"<md5hash>"}'
     """
-    # Validate merchant code
     if request.merchantcode != MERCHANT_CODE:
-        return {
-            "statusCode": "02",
-            "statusMessage": "Invalid merchant code",
-        }
+        return {"statusCode": "02", "statusMessage": "Invalid merchant code"}
 
-    # Validate signature
     if not verify_signature(request.merchantcode, request.merchantOrderId, request.signature):
-        return {
-            "statusCode": "02",
-            "statusMessage": "Invalid signature",
-        }
+        return {"statusCode": "02", "statusMessage": "Invalid signature"}
 
-    # Lookup transaction
     transaction = TRANSACTIONS.get(request.merchantOrderId)
     if transaction is None:
+        try:
+            return_id = int(request.merchantOrderId)
+        except ValueError:
+            return_id = request.merchantOrderId
+            
         return {
-            "statusCode": "02",
-            "statusMessage": f"Transaction not found: {request.merchantOrderId}",
+            "merchantOrderId": return_id,
+            "reference": "",
+            "amount": "0",
+            "fee": "0",
+            "statusCode": "01",
+            "statusMessage": "Transaction Not Found"
         }
 
     return transaction
-
 
 @app.get("/")
 async def root():
     """Health check and API info."""
     return {
-        "service": "Duitku Sandbox API",
+        "service": "Duitku Sandbox API (Multi-Case)",
         "version": "1.0.0",
         "merchant_code": MERCHANT_CODE,
-        "available_transactions": list(TRANSACTIONS.keys()),
+        "available_transactions": len(TRANSACTIONS),
         "endpoint": "/webapi/api/merchant/transactionStatus",
     }
-
 
 if __name__ == "__main__":
     import uvicorn
