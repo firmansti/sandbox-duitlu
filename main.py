@@ -150,14 +150,11 @@ async def transaction_status(request: TransactionStatusRequest):
         except ValueError:
             return_id = request.merchantOrderId
             
-        return {
-            "merchantOrderId": return_id,
-            "reference": "",
-            "amount": "0",
-            "fee": "0",
-            "statusCode": "01",
-            "statusMessage": "Transaction Not Found"
-        }
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=404,
+            content={"Message": "Transaction Not Found"}
+        )
 
     return transaction
 
